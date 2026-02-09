@@ -3,7 +3,6 @@ import time
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
-    KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton
 )
@@ -19,12 +18,11 @@ from telegram.ext import (
 # =========================
 # SETTINGS
 # =========================
-TOKEN = "8516700367:AAHW1TP5-sKGkfKdGsVg2e7kK1y8L3U6QMA"
-ADMIN_ID = 7424095511
+TOKEN = "8166158646:AAFU-Dya1jJsVQbcX4mNsUPaSrAdydL8uNA"
 DB_FILE = "bot.db"
 
 PAGE_SIZE = 5
-SPAM_LIMIT_SECONDS = 0.1
+SPAM_LIMIT_SECONDS = 0.2
 last_message_time = {}
 
 # =========================
@@ -40,10 +38,8 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
-        phone TEXT,
         folder_id INTEGER,
-        folder_name TEXT,
-        pin TEXT
+        folder_name TEXT
     )
     """)
 
@@ -75,19 +71,15 @@ def is_spam(uid):
 # =========================
 # MENUS
 # =========================
-def phone_menu():
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton("📱 Telefon raqamni yuborish", request_contact=True)]],
-        resize_keyboard=True
-    )
+def user_menu(folder_id, folder_name, save_mode=False):
+    save_text = "🟢 Saqlash rejimi ON" if save_mode else "🔴 Saqlash rejimi OFF"
 
-def user_menu(folder_id, folder_name):
     return ReplyKeyboardMarkup(
         [
             [f"📁 Papka #{folder_id} ({folder_name})"],
             ["📂 Saqlanganlar"],
-            ["📥 Saqlash rejimi"],
-            ["🔍 Qidirish", "🗑 Papkani tozalash"],
+            [save_text],
+            ["🗑 Papkani tozalash"],
             ["ℹ️ Info"]
         ],
         resize_keyboard=True
@@ -104,11 +96,10 @@ def get_user(uid):
     con.close()
     return r
 
-def create_user(uid, phone):
+def create_user(uid):
     con = db()
     cur = con.cursor()
-    cur.execute("INSERT INTO users VALUES (?,?,?,?,?)",
-                (uid, phone, uid, "Shaxsiy", None))
+    cur.execute("INSERT OR IGNORE INTO users VALUES (?,?,?)", (uid, int(uid), "Shaxsiy"))
     con.commit()
     con.close()
 
@@ -197,7 +188,7 @@ def clear_folder(folder_id):
     con.close()
 
 # =========================
-# SEND ITEM (ID orqali)
+# SEND ITEM
 # =========================
 async def send_item(update, folder_id, item_id):
     item = get_item_by_id(folder_id, item_id)
@@ -221,7 +212,7 @@ async def send_item(update, folder_id, item_id):
         await update.message.reply_voice(fid)
 
 # =========================
-# SHOW PAGE
+# SHOW PAGE (Inline Pagination)
 # =========================
 async def show_page(update, folder_id, page=0):
     total = count_items(folder_id)
@@ -229,84 +220,147 @@ async def show_page(update, folder_id, page=0):
         await update.message.reply_text("📂 Papka bo‘sh")
         return
 
-    items = get_items(folder_id, page * PAGE_SIZE)
-    msg = "📂 Saqlanganlar:\n\n"
+    offset = page * PAGE_SIZE
+    items = get_items(folder_id, offset)
+
+    msg = f"📂 Saqlanganlar (Page {page+1}):\n\n"
 
     for i in items:
         msg += f"🆔 {i[0]} | {i[1]}\n"
 
     msg += "\n📌 ID yozsangiz – shu fayl chiqadi"
-    await update.message.reply_text(msg)
+
+    buttons = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=f"page_{page-1}"))
+    if offset + PAGE_SIZE < total:
+        buttons.append(InlineKeyboardButton("➡️ Keyingi", callback_data=f"page_{page+1}"))
+
+    markup = InlineKeyboardMarkup([buttons]) if buttons else None
+
+    await update.message.reply_text(msg, reply_markup=markup)
+
+# =========================
+# CALLBACK (Next/Prev)
+# =========================
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    uid = str(query.from_user.id)
+    user = get_user(uid)
+    if not user:
+        create_user(uid)
+        user = get_user(uid)
+
+    folder_id = user[1]
+
+    data = query.data
+    if data.startswith("page_"):
+        page = int(data.split("_")[1])
+
+        total = count_items(folder_id)
+        offset = page * PAGE_SIZE
+        items = get_items(folder_id, offset)
+
+        msg = f"📂 Saqlanganlar (Page {page+1}):\n\n"
+        for i in items:
+            msg += f"🆔 {i[0]} | {i[1]}\n"
+
+        msg += "\n📌 ID yozsangiz – shu fayl chiqadi"
+
+        buttons = []
+        if page > 0:
+            buttons.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=f"page_{page-1}"))
+        if offset + PAGE_SIZE < total:
+            buttons.append(InlineKeyboardButton("➡️ Keyingi", callback_data=f"page_{page+1}"))
+
+        markup = InlineKeyboardMarkup([buttons]) if buttons else None
+
+        await query.message.edit_text(msg, reply_markup=markup)
 
 # =========================
 # START
 # =========================
 async def start(update, context):
     uid = str(update.message.from_user.id)
-    user = get_user(uid)
 
-    if not user:
-        await update.message.reply_text(
-            "📱 Telefon raqamingizni yuboring",
-            reply_markup=phone_menu()
-        )
-        return
+    if not get_user(uid):
+        create_user(uid)
+
+    user = get_user(uid)
+    save_mode = context.user_data.get("save", False)
 
     await update.message.reply_text(
-        "✅ Xush kelibsiz",
-        reply_markup=user_menu(user[2], user[3])
+        "✅ Xush kelibsiz!\n\n📌 Saqlash rejimini yoqib fayl yuborsangiz saqlanadi.",
+        reply_markup=user_menu(user[1], user[2], save_mode)
     )
 
 # =========================
-# CONTACT
+# INFO
 # =========================
-async def handle_contact(update, context):
-    uid = str(update.message.from_user.id)
-    if get_user(uid):
-        return
-    create_user(uid, update.message.contact.phone_number)
-    await update.message.reply_text("✅ Ro‘yxatdan o‘tdingiz")
+async def info(update, context):
+    await update.message.reply_text(
+        "ℹ️ Bot imkoniyatlari:\n\n"
+        "✅ Saqlash rejimi ON/OFF\n"
+        "✅ Matn, rasm, video, audio, dokument saqlaydi\n"
+        "✅ ID orqali qayta chiqaradi\n"
+        "✅ Papkani tozalash bor\n"
+        "✅ Pagination bor\n"
+    )
 
 # =========================
 # MAIN HANDLER
 # =========================
 async def handle_all(update, context):
     uid = str(update.message.from_user.id)
+
     if is_spam(uid):
         return
 
+    if not get_user(uid):
+        create_user(uid)
+
     user = get_user(uid)
-    if not user:
-        await update.message.reply_text("Avval /start")
-        return
+    folder_id = user[1]
 
-    folder_id = user[2]
-
+    # TEXT COMMANDS
     if update.message.text:
         t = update.message.text.strip()
 
         if t == "📂 Saqlanganlar":
-            await show_page(update, folder_id)
+            await show_page(update, folder_id, 0)
             return
 
-        if t == "📥 Saqlash rejimi":
-            context.user_data["save"] = True
-            await update.message.reply_text("📥 Endi fayl yuboring")
+        if "Saqlash rejimi" in t:
+            current = context.user_data.get("save", False)
+            context.user_data["save"] = not current
+            save_mode = context.user_data["save"]
+
+            await update.message.reply_text(
+                f"✅ Saqlash rejimi {'ON' if save_mode else 'OFF'}",
+                reply_markup=user_menu(folder_id, user[2], save_mode)
+            )
             return
 
         if t == "🗑 Papkani tozalash":
             clear_folder(folder_id)
-            await update.message.reply_text("🗑 Tozalandi")
+            await update.message.reply_text("🗑 Papka tozalandi!")
             return
 
-        # 🔥 FAOL TALAB: faqat ID yozsa chiqadi
+        if t == "ℹ️ Info":
+            await info(update, context)
+            return
+
+        # ID orqali chiqarish
         if t.isdigit():
             await send_item(update, folder_id, int(t))
             return
 
-    if context.user_data.get("save"):
+    # SAVE MODE
+    if context.user_data.get("save", False):
         if save_item(folder_id, update.message):
-            await update.message.reply_text("✅ Saqlandi")
+            await update.message.reply_text("✅ Saqlandi!")
         return
 
 # =========================
@@ -314,10 +368,11 @@ async def handle_all(update, context):
 # =========================
 def main():
     init_db()
+
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_all))
 
     print("Bot ishga tushdi")

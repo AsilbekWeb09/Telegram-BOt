@@ -1,8 +1,5 @@
 venv/
-.env
 __pycache__/
 *.pyc
-*.db
-data.json
-folders.json
-users.json
+bot.db
+.env
