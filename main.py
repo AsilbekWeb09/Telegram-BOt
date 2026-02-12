@@ -1,5 +1,8 @@
+import os
 import sqlite3
 import time
+from dotenv import load_dotenv
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -16,14 +19,22 @@ from telegram.ext import (
 )
 
 # =========================
+# LOAD ENV
+# =========================
+load_dotenv()
+
+# =========================
 # SETTINGS
 # =========================
-TOKEN = "8166158646:AAFU-Dya1jJsVQbcX4mNsUPaSrAdydL8uNA"
+TOKEN = os.getenv("TOKEN")
 DB_FILE = "bot.db"
 
 PAGE_SIZE = 5
 SPAM_LIMIT_SECONDS = 0.2
 last_message_time = {}
+
+if not TOKEN:
+    raise ValueError("❌ TOKEN topilmadi! .env faylga TOKEN yoz yoki Koyeb ENV ga qo'y!")
 
 # =========================
 # DATABASE
@@ -192,39 +203,42 @@ def clear_folder(folder_id):
 # =========================
 async def send_item(update, folder_id, item_id):
     item = get_item_by_id(folder_id, item_id)
+    msg_obj = update.message if update.message else update.callback_query.message
+
     if not item:
-        await update.message.reply_text("❌ Bunday ID yo‘q")
+        await msg_obj.reply_text("❌ Bunday ID yo‘q")
         return
 
     t, text, fid, fname, cap = item
 
     if t == "text":
-        await update.message.reply_text(text)
+        await msg_obj.reply_text(text)
     elif t == "photo":
-        await update.message.reply_photo(fid, caption=cap)
+        await msg_obj.reply_photo(fid, caption=cap)
     elif t == "video":
-        await update.message.reply_video(fid, caption=cap)
+        await msg_obj.reply_video(fid, caption=cap)
     elif t == "audio":
-        await update.message.reply_audio(fid, caption=cap)
+        await msg_obj.reply_audio(fid, caption=cap)
     elif t == "document":
-        await update.message.reply_document(fid, caption=cap)
+        await msg_obj.reply_document(fid, caption=cap)
     elif t == "voice":
-        await update.message.reply_voice(fid)
+        await msg_obj.reply_voice(fid)
 
 # =========================
-# SHOW PAGE (Inline Pagination)
+# SHOW PAGE
 # =========================
 async def show_page(update, folder_id, page=0):
     total = count_items(folder_id)
+    msg_obj = update.message if update.message else update.callback_query.message
+
     if total == 0:
-        await update.message.reply_text("📂 Papka bo‘sh")
+        await msg_obj.reply_text("📂 Papka bo‘sh")
         return
 
     offset = page * PAGE_SIZE
     items = get_items(folder_id, offset)
 
     msg = f"📂 Saqlanganlar (Page {page+1}):\n\n"
-
     for i in items:
         msg += f"🆔 {i[0]} | {i[1]}\n"
 
@@ -237,11 +251,10 @@ async def show_page(update, folder_id, page=0):
         buttons.append(InlineKeyboardButton("➡️ Keyingi", callback_data=f"page_{page+1}"))
 
     markup = InlineKeyboardMarkup([buttons]) if buttons else None
-
-    await update.message.reply_text(msg, reply_markup=markup)
+    await msg_obj.reply_text(msg, reply_markup=markup)
 
 # =========================
-# CALLBACK (Next/Prev)
+# CALLBACK
 # =========================
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -276,7 +289,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buttons.append(InlineKeyboardButton("➡️ Keyingi", callback_data=f"page_{page+1}"))
 
         markup = InlineKeyboardMarkup([buttons]) if buttons else None
-
         await query.message.edit_text(msg, reply_markup=markup)
 
 # =========================
@@ -324,8 +336,7 @@ async def handle_all(update, context):
     user = get_user(uid)
     folder_id = user[1]
 
-    # TEXT COMMANDS
-    if update.message.text:
+    if update.message and update.message.text:
         t = update.message.text.strip()
 
         if t == "📂 Saqlanganlar":
@@ -352,12 +363,10 @@ async def handle_all(update, context):
             await info(update, context)
             return
 
-        # ID orqali chiqarish
         if t.isdigit():
             await send_item(update, folder_id, int(t))
             return
 
-    # SAVE MODE
     if context.user_data.get("save", False):
         if save_item(folder_id, update.message):
             await update.message.reply_text("✅ Saqlandi!")
@@ -375,7 +384,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_all))
 
-    print("Bot ishga tushdi")
+    print("Bot ishga tushdi...")
     app.run_polling()
 
 if __name__ == "__main__":
